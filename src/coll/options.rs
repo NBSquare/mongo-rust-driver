@@ -838,9 +838,9 @@ pub struct FindOneOptions {
 ///
 /// For more information, see [`createIndexes`](https://docs.mongodb.com/manual/reference/command/createIndexes/).
 #[serde_with::skip_serializing_none]
-#[derive(Clone, Debug, Default, TypedBuilder, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, TypedBuilder, Serialize)]
 #[builder(field_defaults(default, setter(into)))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[non_exhaustive]
 pub struct CreateIndexOptions {
     /// Specify the commit quorum needed to mark an `index` as ready.
@@ -903,7 +903,7 @@ pub struct DropIndexOptions {
 /// [`Collection::list_indexes`](../struct.Collection.html#method.list_indexes) operation.
 #[serde_with::skip_serializing_none]
 #[derive(Clone, Debug, Default, Deserialize, TypedBuilder, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 #[builder(field_defaults(default, setter(into)))]
 #[non_exhaustive]
 pub struct ListIndexOptions {

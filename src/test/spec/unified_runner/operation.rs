@@ -9,10 +9,12 @@ use crate::{
     bson::{doc, to_bson, Bson, Deserializer as BsonDeserializer, Document},
     client::session::{ClientSession, TransactionState},
     error::Result,
+    index::{options::IndexOptions, IndexModel},
     options::{
         AggregateOptions,
         CountOptions,
         CreateCollectionOptions,
+        CreateIndexOptions,
         DeleteOptions,
         DistinctOptions,
         DropCollectionOptions,
@@ -26,6 +28,7 @@ use crate::{
         InsertOneOptions,
         ListCollectionsOptions,
         ListDatabasesOptions,
+        ListIndexOptions,
         ReplaceOptions,
         SelectionCriteria,
         UpdateModifications,
@@ -33,6 +36,7 @@ use crate::{
     },
     selection_criteria::ReadPreference,
     test::FailPoint,
+    Collection,
     RUNTIME,
 };
 
@@ -233,6 +237,22 @@ impl<'de> Deserialize<'de> for Operation {
             }
             "abortTransaction" => {
                 AbortTransaction::deserialize(BsonDeserializer::new(definition.arguments))
+                    .map(|op| Box::new(op) as Box<dyn TestOperation>)
+            }
+            "createIndex" => CreateIndex::deserialize(BsonDeserializer::new(definition.arguments))
+                .map(|op| Box::new(op) as Box<dyn TestOperation>),
+            "listIndexes" => ListIndexes::deserialize(BsonDeserializer::new(definition.arguments))
+                .map(|op| Box::new(op) as Box<dyn TestOperation>),
+            "listIndexNames" => {
+                ListIndexNames::deserialize(BsonDeserializer::new(definition.arguments))
+                    .map(|op| Box::new(op) as Box<dyn TestOperation>)
+            }
+            "assertIndexExists" => {
+                AssertIndexExists::deserialize(BsonDeserializer::new(definition.arguments))
+                    .map(|op| Box::new(op) as Box<dyn TestOperation>)
+            }
+            "assertIndexNotExists" => {
+                AssertIndexNotExists::deserialize(BsonDeserializer::new(definition.arguments))
                     .map(|op| Box::new(op) as Box<dyn TestOperation>)
             }
             _ => Ok(Box::new(UnimplementedOperation) as Box<dyn TestOperation>),
@@ -1445,6 +1465,162 @@ impl TestOperation for AbortTransaction {
             let session: &mut ClientSession = test_runner.get_mut_session(id);
             session.abort_transaction().await?;
             Ok(None)
+        }
+        .boxed()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CreateIndex {
+    keys: Document,
+
+    #[serde(flatten)]
+    options: Option<IndexOptions>,
+
+    session: Option<String>,
+
+    #[serde(flatten)]
+    create_options: Option<CreateIndexOptions>,
+}
+
+impl TestOperation for CreateIndex {
+    fn execute_entity_operation<'a>(
+        &'a self,
+        id: &'a str,
+        test_runner: &'a mut TestRunner,
+    ) -> BoxFuture<'a, Result<Option<Entity>>> {
+        async move {
+            let coll = test_runner.get_collection(id).clone();
+            let index = IndexModel::builder()
+                .keys(self.keys.clone())
+                .options(self.options.clone())
+                .build();
+            if let Some(session_id) = &self.session {
+                coll.create_index_with_session(
+                    index,
+                    self.create_options.clone(),
+                    test_runner.get_mut_session(session_id),
+                )
+                .await?;
+            } else {
+                coll.create_index(index, self.create_options.clone())
+                    .await?;
+            }
+            Ok(None)
+        }
+        .boxed()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ListIndexes {
+    session: Option<String>,
+
+    #[serde(flatten)]
+    list_options: Option<ListIndexOptions>,
+}
+
+impl TestOperation for ListIndexes {
+    fn execute_entity_operation<'a>(
+        &'a self,
+        id: &'a str,
+        test_runner: &'a mut TestRunner,
+    ) -> BoxFuture<'a, Result<Option<Entity>>> {
+        async move {
+            let coll = test_runner.get_collection(id).clone();
+            if let Some(session_id) = &self.session {
+                coll.list_indexes_with_session(
+                    self.list_options.clone(),
+                    test_runner.get_mut_session(session_id),
+                )
+                .await?;
+            } else {
+                coll.list_indexes(self.list_options.clone()).await?;
+            }
+            Ok(None)
+        }
+        .boxed()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ListIndexNames {
+    session: Option<String>,
+}
+
+impl TestOperation for ListIndexNames {
+    fn execute_entity_operation<'a>(
+        &'a self,
+        id: &'a str,
+        test_runner: &'a mut TestRunner,
+    ) -> BoxFuture<'a, Result<Option<Entity>>> {
+        async move {
+            let coll = test_runner.get_collection(id).clone();
+            if let Some(session_id) = &self.session {
+                coll.list_index_names_with_session(test_runner.get_mut_session(session_id))
+                    .await?;
+            } else {
+                coll.list_index_names().await?;
+            }
+            Ok(None)
+        }
+        .boxed()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AssertIndexExists {
+    database_name: String,
+    collection_name: String,
+    index_name: String,
+}
+
+impl TestOperation for AssertIndexExists {
+    fn execute_test_runner_operation<'a>(
+        &'a self,
+        test_runner: &'a mut TestRunner,
+    ) -> BoxFuture<'a, ()> {
+        async move {
+            let coll: Collection<Document> = test_runner
+                .internal_client
+                .database(&self.database_name)
+                .collection(&self.collection_name);
+            let names = coll.list_index_names().await.unwrap();
+            assert!(names.contains(&self.index_name));
+        }
+        .boxed()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AssertIndexNotExists {
+    database_name: String,
+    collection_name: String,
+    index_name: String,
+}
+
+impl TestOperation for AssertIndexNotExists {
+    fn execute_test_runner_operation<'a>(
+        &'a self,
+        test_runner: &'a mut TestRunner,
+    ) -> BoxFuture<'a, ()> {
+        async move {
+            let coll: Collection<Document> = test_runner
+                .internal_client
+                .database(&self.database_name)
+                .collection(&self.collection_name);
+            let result = coll.list_index_names().await;
+            match result {
+                Ok(names) => assert!(!names.contains(&self.index_name)),
+
+                // If the namespace does not exist, the index doesn't either.
+                Err(error) => assert!(error.is_ns_not_found()),
+            }
         }
         .boxed()
     }
